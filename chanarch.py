@@ -4,6 +4,7 @@
 # Compatibility
 from __future__ import division, print_function, unicode_literals
 
+import argparse
 import json
 import logging
 import os.path
@@ -282,19 +283,49 @@ class Downloader(object):
 
 # FIXME: Everything from here on is temporary for now
 
-# Info logging mode, go!
-logging.basicConfig(level=logging.DEBUG)
+# Argument parsing
+parser = argparse.ArgumentParser(description='Download the files of 4chan threads')
+parser.add_argument('-f', '--file', help='list of threads in a file')
+parser.add_argument('-d', '--directory',
+                    help='download directory (defaults to .)', default='.')
+parser.add_argument('thread', help='thread URLs', nargs='*')
 
-# Just read the first script argument as the download directory, and the rest
-# as threads
-downdir = sys.argv[1]
+g = parser.add_mutually_exclusive_group()
+g.add_argument('-q', '--quiet', help='be quiet', action='store_true')
+g.add_argument('-v', '--verbose', help='increase verbosity',
+                    action='store_true')
+g.add_argument('--debug', help='debug-level verbosity',
+                    action='store_true')
+
+args = parser.parse_args()
+
+# Logging mode, go!
+if args.debug:
+    logging.basicConfig(level=logging.DEBUG)
+elif args.verbose:
+    logging.basicConfig(level=logging.INFO)
+elif args.quiet:
+    logging.basicConfig(level=logging.ERROR)
+else:
+    logging.basicConfig(level=logging.WARN)
+
+# Build thread list
 threads = []
+downdir = args.directory
 
-# Create ChanThread objects
-for thread in sys.argv[2:]:
-    threads.append(ChanThread(thread, downdir))
+# Read the file (if given)
+if args.file:
+    f = open(args.file, 'r')
+    for thread in f:
+        threads.append(ChanThread(thread.strip(), downdir))
+
+# Read threads from the arguments
+for thread in args.thread:
+    threads.append(ChanThread(thread.strip(), downdir))
 
 # Download each thread
 for thread in threads:
     thread.update_info()
     thread.download_files()
+
+logging.info('Completed all downloads')
