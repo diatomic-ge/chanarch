@@ -11,12 +11,14 @@ import os.path
 import re
 import sys
 
-# Python 3 split urllib2 up
+# Python 3 renamed modules
 if sys.version_info.major == 2:
     from urllib2 import Request, urlopen, HTTPError
+    from httplib import HTTPConnection, HTTPSConnection
 else:
     from urllib.request import Request, urlopen
     from urllib.error import HTTPError
+    from http.client import HTTPConnection, HTTPSConnection
 
 class ChanThread(object):
     """
@@ -30,7 +32,7 @@ class ChanThread(object):
       threadinfo (dict): Parsed JSON as a dictionary
       usehttps (bool): If true, use HTTPS rather than HTTP
     """
-    
+
     def __init__(self, thread, downdir, mksubdir=True):
         """
         Initialize a ChanThread object.
@@ -89,7 +91,7 @@ class ChanThread(object):
             downdir = os.path.join(downdir, self.threadid)
 
         self.downdir = downdir
-        
+
     def parse_url(self, threadurl):
         """
         Parse a 4chan thread URL.
@@ -118,7 +120,7 @@ class ChanThread(object):
             usehttps = True
         else:
             usehttps = False
-        
+
         board = m.group(2)
         threadnum = m.group(3)
 
@@ -131,7 +133,7 @@ class ChanThread(object):
         Reconnects to the 4chan server to retrieve and parse the thread JSON
         """
 
-        logging.debug('Downloading /%s/thread/%s JSON' % 
+        logging.debug('Downloading /%s/thread/%s JSON' %
                       (self.board, self.threadid))
 
         # Download the JSON
@@ -142,7 +144,7 @@ class ChanThread(object):
             resp = urlopen(req)
         except HTTPError as err:
             if err.getcode() == 404:
-                logging.info('/%s/thread/%s 404\'d' % 
+                logging.info('/%s/thread/%s 404\'d' %
                              (self.board, self.threadid))
                 self.thread_is_dead = True
                 return
@@ -167,14 +169,13 @@ class ChanThread(object):
                          (self.board, self.threadid))
             return
 
-        logging.info('Downloading /%s/thread/%s to %s' % 
+        logging.info('Downloading /%s/thread/%s to %s' %
                      (self.board, self.threadid, self.downdir))
 
         # Check if we're using HTTPS or HTTP for the server
-        if self.usehttps:
-            imgserver = 'https://i.4cdn.org/'
-        else:
-            imgserver = 'http://i.4cdn.org/'
+        imgserver = 'i.4cdn.org'
+
+        down = Downloader(imgserver, self.usehttps)
 
         # Loop over each post
         for post in self.threadinfo['posts']:
@@ -184,104 +185,140 @@ class ChanThread(object):
 
             # If there's a file in this post, download it
             if (ext is not None) and (filedeleted != 1):
-                # Build the download location 
+                # Build the download location
                 filename = ''.join([str(tim), ext])
                 filepath = os.path.join(self.downdir, filename)
-                url = ''.join([imgserver, self.board, '/', filename])
+                url = ''.join(['/', self.board, '/', filename])
 
                 # Download the file
-                down = Downloader(url, filepath)
-                down.download()
+                down.download(url, filepath)
+
+        # Close the connection
+        down.close()
 
 class Downloader(object):
     """
-    Implements resumable downloading for HTTP(S)
+    Implements resumable downloading and connection reuse for HTTP(S)
 
     Attributes:
-      url (str): The URL to download
-      filepath (str): The location to download to
+      conn (HTTP(S)Connection): The current connection
+      server (str): The server to connnect to
+      usehttps (bool): Whether to use HTTPS instead of HTTP
     """
 
-    def __init__(self, url, filepath):
+    def __init__(self, server, usehttps):
         """
         Initialize the downloader
 
         Set the downloader URL and filepath
 
         Args:
-          url (str): The URL to download
-          filepath (str): The filename to download the file to
+          server (str): The server to connect to
+          usehttps (bool): Whether to use HTTPS instead of HTTP
         """
 
-        self.url = None
-        self.filepath = None
-        self.set_download(url, filepath)
+        self.conn = None
+        self.server = None
+        self.usehttps = None
+        self.set_server(server, usehttps)
 
-    def set_download(self, url, filepath):
+    def __del__(self):
         """
-        (Re)set the download URL and location
+        Destroy the downloader
 
-        Set the URL and download location.
+        Close the connection
         """
 
-        self.url = url
-        self.filepath = filepath
+        self.close()
 
-    def download(self):
+    def set_server(self, server, usehttps):
         """
-        Download the file
+        (Re)set the server info
 
-        If the file exists, resume downloading, otherwise start downloading.
+        Set the server address and HTTP/HTTPS selection, closing any active
+        connection
+
+        Args:
+          server (str): The server to connect to
+          usehttps (bool): Whether to use HTTPS instead of HTTP
+        """
+
+        self.close()
+        self.server = server
+        self.usehttps = usehttps
+
+    def close(self):
+        """
+        Close active connection, if open
+        """
+
+        if self.conn:
+            self.conn.close()
+
+        self.conn = None
+
+    def download(self, servpath, filepath):
+        """
+        Download a file from the server
+
+        Download servpath to filepath, opening a connection if one isn't
+        already open, otherwise reuse the current one. If the file exists,
+        resume downloading, otherwise start downloading.
         """
 
         # Create the download directory if it doesn't exist already
-        outdir = os.path.dirname(self.filepath)
+        outdir = os.path.dirname(filepath)
         if not os.path.exists(outdir):
             logging.debug('Creating directory: %s' % (outdir))
             os.makedirs(outdir)
 
         # Open the file and get the current position
-        outfile = open(self.filepath, 'ab')
-        filepos = os.path.getsize(self.filepath)
+        outfile = open(filepath, 'ab')
+        filepos = os.path.getsize(filepath)
 
-        # Build the request
-        req = Request(self.url)
-        
-        req.add_header('Range', 'bytes=%d-' % (filepos))
+        # Open a connection
+        if (self.conn is None):
+            if self.usehttps:
+                self.conn = HTTPSConnection(self.server)
+            else:
+                self.conn = HTTPConnection(self.server)
+        else:
+            logging.debug('Reusing existing connection to %s' % (self.server))
+
+        self.conn.request('GET', servpath, headers =
+                          {'Connection': ' keep-alive',
+                           'Range': ' bytes=%d-' % (filepos)})
+
+        resp = self.conn.getresponse()
+
+        # If we got code 416, the file's already downloaded completely
+        # Read whatever might be left and return
+        if resp.status == 416:
+            logging.debug('File already downloaded')
+            resp.read()
+            return
 
         # Download the file incrementally (it's more resumable)
         block_sz = 16384
 
-        # If we get an HTTP 416 "Error", we've already downloaded the file
-        try:
-            logging.debug('Downloading %s to %s, starting at byte %d' % 
-                          (self.url, self.filepath, filepos))
-            conn = urlopen(req)
+        logging.debug('Downloading %s to %s, starting at byte %d' %
+                      (servpath, filepath, filepos))
 
-            # Download/write loop
-            while True:
-                buff = conn.read(block_sz)
+        # Download/write loop
+        while True:
+            buff = resp.read(block_sz)
 
-                # Check if we're done downloading
-                if not buff:
-                    break
+            # Check if we're done downloading
+            if not buff:
+                break
 
-                # Write
-                outfile.write(buff)
-
-        except HTTPError as err:
-            # HTTP 416 means we've already got the whole file
-            if err.getcode() != 416:
-                raise
-            else:
-                logging.debug('File already downloaded')
+            # Write
+            outfile.write(buff)
 
         logging.debug('File download completed')
 
         # Close the file
         outfile.close()
-
-# FIXME: Everything from here on is temporary for now
 
 # Argument parsing
 parser = argparse.ArgumentParser(description='Download the files of 4chan threads')
