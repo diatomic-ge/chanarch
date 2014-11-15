@@ -337,6 +337,11 @@ g.add_argument('--debug', help='debug-level verbosity',
 
 args = parser.parse_args()
 
+# If we didn't read any 'actions' or threads, print help
+if (not args.file) and (not args.thread):
+    parser.print_help()
+    sys.exit()
+
 # Logging mode, go!
 if args.debug:
     logging.basicConfig(level=logging.DEBUG)
