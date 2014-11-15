@@ -322,7 +322,8 @@ class Downloader(object):
 
 # Argument parsing
 parser = argparse.ArgumentParser(description='Download the files of 4chan threads')
-parser.add_argument('-f', '--file', help='list of threads in a file')
+parser.add_argument('-f', '--file', help='list of threads in a file',
+                    type=argparse.FileType('r'), action='append')
 parser.add_argument('-d', '--directory',
                     help='download directory (defaults to .)', default='.')
 parser.add_argument('thread', help='thread URLs', nargs='*')
@@ -330,9 +331,9 @@ parser.add_argument('thread', help='thread URLs', nargs='*')
 g = parser.add_mutually_exclusive_group()
 g.add_argument('-q', '--quiet', help='be quiet', action='store_true')
 g.add_argument('-v', '--verbose', help='increase verbosity',
-                    action='store_true')
+               action='store_true')
 g.add_argument('--debug', help='debug-level verbosity',
-                    action='store_true')
+               action='store_true')
 
 args = parser.parse_args()
 
@@ -346,15 +347,17 @@ elif args.quiet:
 else:
     logging.basicConfig(level=logging.WARN)
 
-# Build thread list
-threads = []
+# Read the download directory
 downdir = args.directory
 
-# Read the file (if given)
+# Build thread list
+threads = []
+
+# Read the file(s)
 if args.file:
-    f = open(args.file, 'r')
-    for thread in f:
-        threads.append(ChanThread(thread.strip(), downdir))
+    for f in args.file:
+        for thread in f:
+            threads.append(ChanThread(thread.strip(), downdir))
 
 # Read threads from the arguments
 for thread in args.thread:
