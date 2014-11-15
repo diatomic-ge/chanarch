@@ -27,6 +27,17 @@ import logging
 import os.path
 import re
 import sys
+import textwrap
+
+# Program information
+progname = 'Chanarch'
+version = '0.0.0'
+version_string = ''.join([progname, ' ', version])
+copyright = 'Copyright (C) 2014 diatomic.ge'
+licensenotice = textwrap.dedent('''\
+    License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.''')
 
 # Python 3 renamed modules
 if sys.version_info.major == 2:
@@ -352,7 +363,18 @@ g.add_argument('-v', '--verbose', help='increase verbosity',
 g.add_argument('--debug', help='debug-level verbosity',
                action='store_true')
 
+parser.add_argument('-V', '--version', help='print version and exit',
+                    action='store_true')
+
 args = parser.parse_args()
+
+# Version printing
+if args.version:
+    # Print version, copyright, and license notice and exit
+    print(version_string)
+    print(copyright)
+    print(licensenotice)
+    sys.exit()
 
 # If we didn't read any 'actions' or threads, print help
 if (not args.file) and (not args.thread):
