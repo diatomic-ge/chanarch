@@ -65,9 +65,18 @@ a file, or multiple files, with one URL per line. For instance:
 
 This will read URLs from ``FILE``, one per line.
 
+Chanarch can also scrape all of the URLs in the comments of threads. For example:
+
+  ``./chanarch.py -l LINKFILE URL``
+
+Will not only download all the files from the thread, but also write all links
+to ``LINKFILE``. This is non-destructive, and only adds links. It also removes
+duplicates and sorts the links, so you can reuse ``LINKFILE`` safely for future
+downloads.
+
 Multiple types of arguments can be used simultaneously, such as:
 
-  ``./chanarch.py -f FILE1 -f FILE2 -d DIRECTORY URL1 URL2``
+  ``./chanarch.py -l LINKFILE -f FILE1 -f FILE2 -d DIRECTORY URL1 URL2``
 
 In order to get a full list of arguments, as well as their corresponding
 long-argument versions, run:

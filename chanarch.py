@@ -31,7 +31,7 @@ import textwrap
 
 # Program information
 progname = 'Chanarch'
-version = '0.1.1'
+version = '0.2.x-beta'
 version_string = ''.join([progname, ' ', version])
 copyright = 'Copyright (C) 2014 diatomic.ge'
 licensenotice = textwrap.dedent('''\
@@ -56,12 +56,13 @@ class ChanThread(object):
       board (str): Which 4chan board the thread is on
       downdir (str): Download directory for this thread
       jsonurl (str): URL of the thread's JSON
+      linkfile (str): Name of the file to scrape links into
       thread_is_dead (bool): If true, thread 404'd
       threadinfo (dict): Parsed JSON as a dictionary
       usehttps (bool): If true, use HTTPS rather than HTTP
     """
 
-    def __init__(self, thread, downdir, mksubdir=True):
+    def __init__(self, thread, downdir, mksubdir=True, linkfile=None):
         """
         Initialize a ChanThread object.
 
@@ -72,18 +73,21 @@ class ChanThread(object):
           thread (str): A 4chan thread URL
           downdir (str): The directory to download files to
           mksubdir (bool): If true, download into downdir/[THREAD_NUMBER]
+          linkfile (str): The file to scrape links into
         """
 
         self.board = None
         self.downdir = None
         self.jsonurl = None
+        self.linkfile = None
         self.thread_is_dead = None
         self.threadinfo = None
         self.usehttps = None
 
-        self.set_thread(thread, downdir, mksubdir)
 
-    def set_thread(self, threadurl, downdir, mksubdir=True):
+        self.set_thread(thread, downdir, mksubdir=mksubdir, linkfile=linkfile)
+
+    def set_thread(self, threadurl, downdir, mksubdir=True, linkfile=None):
         """
         (Re)set the thread info
 
@@ -94,6 +98,7 @@ class ChanThread(object):
           threadurl (str): A 4chan thread URL
           downdir (str): The download directory
           mksubdir (bool): If true, download into downdir/[THREAD_NUMBER]
+          linkfile (str): The file to scrape links into
         """
 
         # Parse thread URL
@@ -119,6 +124,9 @@ class ChanThread(object):
             downdir = os.path.join(downdir, self.threadid)
 
         self.downdir = downdir
+
+        # Set link scrape location
+        self.linkfile = linkfile
 
     def parse_url(self, threadurl):
         """
@@ -224,6 +232,73 @@ class ChanThread(object):
 
         # Close the connection
         down.close()
+
+    def scrape_links(self):
+        """
+        Scrapes all links from the thread and saves them.
+
+        If a linkfile was supplied, read it, then use regular expressions to
+        find any links in the thread. Sort and remove duplicates, before writing
+        them back to the link file.
+        """
+
+        # Check if thread is 404'd
+        if self.thread_is_dead:
+            logging.debug('Not scraping dead thread')
+            return
+
+        links = []
+
+        # Read existing links (if they exist)
+        if os.path.exists(self.linkfile):
+            linkfile = open(self.linkfile, 'r')
+            # If the file is empty, linenum isn't assigned
+            linenum = 0
+            for linenum, line in enumerate(linkfile, start=1):
+                links.append(line.rstrip())
+            else:
+                logging.debug('Read %d links from %s' % (linenum, self.linkfile))
+            linkfile.close()
+
+        # Scrape links from each post
+
+        # WARN: Herein lies the realm of madness: finding URLs by regex.
+        # We do this because 4chan's JSON doesn't put links into nice, parsable
+        # <a> tags
+
+        for post in self.threadinfo['posts']:
+            # Iä! Iä! Cthulhu Fhtagn!
+            # This regex matches all (?) legal http(s) and ftp URLs. Modify
+            # carefully.
+            urlregex = '(?:http[s]?|ftp)://(?:[A-Za-z0-9]|[-._~:\/?#\[\]@!\$&\'\(\)*+,;=]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+
+            # Make sure there is a comment, before trying to scrape
+            com = post.get('com')
+            if com:
+                # Strip any special tags, such as the word break tag, that might
+                # appear in the middle of URLs.
+                com = re.sub('<wbr(?:[ ]?/)?>', '', com)
+
+                # Scrape the links
+                postlinks = re.findall(urlregex, com)
+                links.extend(postlinks)
+
+        # Remove duplicates (sets only allow one of each, so convert to remove
+        # duplicates
+        links = list(set(links))
+
+        # Sort and write
+        links.sort()
+
+        linkfile = open(self.linkfile, 'w')
+
+        # If we don't write links, we linknum isn't assigned
+        linknum = 0
+        for linknum, link in enumerate(links, start=1):
+            linkfile.write(''.join([link, '\n']))
+        else:
+            logging.debug('Wrote %d links into %s' % (linknum, self.linkfile))
+        linkfile.close()
 
 class Downloader(object):
     """
@@ -367,6 +442,7 @@ parser.add_argument('-f', '--file', help='list of threads in a file',
                     type=argparse.FileType('r'), action='append')
 parser.add_argument('-d', '--directory',
                     help='download directory (defaults to .)', default='.')
+parser.add_argument('-l', '--linkfile', help='file to scrape links into')
 parser.add_argument('thread', help='thread URLs', nargs='*')
 
 g = parser.add_mutually_exclusive_group()
@@ -414,16 +490,25 @@ threads = []
 if args.file:
     for f in args.file:
         for thread in f:
-            threads.append(ChanThread(thread.strip(), downdir))
+            threads.append(ChanThread(thread.strip(), downdir,
+                                      linkfile=args.linkfile))
 
 # Read threads from the arguments
 for thread in args.thread:
-    threads.append(ChanThread(thread.strip(), downdir))
+    threads.append(ChanThread(thread.strip(), downdir, linkfile=args.linkfile))
 
 # Download each thread
-for tnum, thread in enumerate(threads):
-    logging.info('Downloading thread %d/%d' % (tnum + 1, len(threads)))
+for tnum, thread in enumerate(threads, start=1):
+    # Get thread info
     thread.update_info()
+
+    # Scrape links
+    if args.linkfile:
+        logging.info('Scraping links: %d/%d' % (tnum, len(threads)))
+        thread.scrape_links()
+
+    # Download files
+    logging.info('Downloading thread: %d/%d' % (tnum, len(threads)))
     thread.download_files()
 
 logging.info('Completed all downloads')
