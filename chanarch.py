@@ -172,7 +172,7 @@ class ChanThread(object):
             resp = urlopen(req)
         except HTTPError as err:
             if err.getcode() == 404:
-                logging.info('/%s/thread/%s 404\'d' %
+                logging.debug('/%s/thread/%s 404\'d' %
                              (self.board, self.threadid))
                 self.thread_is_dead = True
                 return
@@ -197,7 +197,7 @@ class ChanThread(object):
                          (self.board, self.threadid))
             return
 
-        logging.info('Downloading /%s/thread/%s to %s' %
+        logging.debug('Downloading /%s/thread/%s to %s' %
                      (self.board, self.threadid, self.downdir))
 
         # Check if we're using HTTPS or HTTP for the server
@@ -421,7 +421,8 @@ for thread in args.thread:
     threads.append(ChanThread(thread.strip(), downdir))
 
 # Download each thread
-for thread in threads:
+for tnum, thread in enumerate(threads):
+    logging.info('Downloading thread %d/%d' % (tnum + 1, len(threads)))
     thread.update_info()
     thread.download_files()
 
