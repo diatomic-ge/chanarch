@@ -210,6 +210,7 @@ class ChanThread(object):
             tim = post.get('tim')
             ext = post.get('ext')
             filedeleted = post.get('filedeleted')
+            filesz = post.get('fsize')
 
             # If there's a file in this post, download it
             if (ext is not None) and (filedeleted != 1):
@@ -219,7 +220,7 @@ class ChanThread(object):
                 url = ''.join(['/', self.board, '/', filename])
 
                 # Download the file
-                down.download(url, filepath)
+                down.download(url, filepath, totsz=filesz)
 
         # Close the connection
         down.close()
@@ -285,13 +286,18 @@ class Downloader(object):
 
         self.conn = None
 
-    def download(self, servpath, filepath):
+    def download(self, servpath, filepath, totsz=None):
         """
         Download a file from the server
 
         Download servpath to filepath, opening a connection if one isn't
         already open, otherwise reuse the current one. If the file exists,
         resume downloading, otherwise start downloading.
+
+        Args:
+          servpath (str): The path to the file on the server
+          filepath (str): The path to download the file as
+          totsz (int): The total size of the file, if known
         """
 
         # Create the download directory if it doesn't exist already
@@ -303,6 +309,13 @@ class Downloader(object):
         # Open the file and get the current position
         outfile = open(filepath, 'ab')
         filepos = os.path.getsize(filepath)
+
+        # Check if the file is already downloaded (if total size is known)
+        if totsz:
+            if filepos == totsz:
+                # Download already completed
+                logging.debug('Requested length already downloaded')
+                return
 
         # Open a connection
         if (self.conn is None):
