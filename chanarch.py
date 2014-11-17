@@ -361,68 +361,72 @@ class Downloader(object):
         # Close the file
         outfile.close()
 
-# Argument parsing
-parser = argparse.ArgumentParser(description='Download the files of 4chan threads')
-parser.add_argument('-f', '--file', help='list of threads in a file',
-                    type=argparse.FileType('r'), action='append')
-parser.add_argument('-d', '--directory',
-                    help='download directory (defaults to .)', default='.')
-parser.add_argument('thread', help='thread URLs', nargs='*')
+# Only run if called as a script
+if __name__ == '__main__':
 
-g = parser.add_mutually_exclusive_group()
-g.add_argument('-q', '--quiet', help='be quiet', action='store_true')
-g.add_argument('-v', '--verbose', help='increase verbosity',
-               action='store_true')
-g.add_argument('--debug', help='debug-level verbosity',
-               action='store_true')
+    # Argument parsing
+    parser = argparse.ArgumentParser(description='Download the files of 4chan'
+                                     'threads')
+    parser.add_argument('-f', '--file', help='list of threads in a file',
+                        type=argparse.FileType('r'), action='append')
+    parser.add_argument('-d', '--directory',
+                        help='download directory (defaults to .)', default='.')
+    parser.add_argument('thread', help='thread URLs', nargs='*')
 
-parser.add_argument('-V', '--version', help='print version and exit',
-                    action='store_true')
+    g = parser.add_mutually_exclusive_group()
+    g.add_argument('-q', '--quiet', help='be quiet', action='store_true')
+    g.add_argument('-v', '--verbose', help='increase verbosity',
+                   action='store_true')
+    g.add_argument('--debug', help='debug-level verbosity',
+                   action='store_true')
 
-args = parser.parse_args()
+    parser.add_argument('-V', '--version', help='print version and exit',
+                        action='store_true')
 
-# Version printing
-if args.version:
-    # Print version, copyright, and license notice and exit
-    print(version_string)
-    print(copyright)
-    print(licensenotice)
-    sys.exit()
+    args = parser.parse_args()
 
-# If we didn't read any 'actions' or threads, print help
-if (not args.file) and (not args.thread):
-    parser.print_help()
-    sys.exit()
+    # Version printing
+    if args.version:
+        # Print version, copyright, and license notice and exit
+        print(version_string)
+        print(copyright)
+        print(licensenotice)
+        sys.exit()
 
-# Logging mode, go!
-if args.debug:
-    logging.basicConfig(level=logging.DEBUG)
-elif args.verbose:
-    logging.basicConfig(level=logging.INFO)
-elif args.quiet:
-    logging.basicConfig(level=logging.ERROR)
-else:
-    logging.basicConfig(level=logging.WARN)
+    # If we didn't read any 'actions' or threads, print help
+    if (not args.file) and (not args.thread):
+        parser.print_help()
+        sys.exit()
 
-# Read the download directory
-downdir = args.directory
+    # Logging mode, go!
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    elif args.verbose:
+        logging.basicConfig(level=logging.INFO)
+    elif args.quiet:
+        logging.basicConfig(level=logging.ERROR)
+    else:
+        logging.basicConfig(level=logging.WARN)
 
-# Build thread list
-threads = []
+    # Read the download directory
+    downdir = args.directory
 
-# Read the file(s)
-if args.file:
-    for f in args.file:
-        for thread in f:
-            threads.append(ChanThread(thread.strip(), downdir))
+    # Build thread list
+    threads = []
 
-# Read threads from the arguments
-for thread in args.thread:
-    threads.append(ChanThread(thread.strip(), downdir))
+    # Read the file(s)
+    if args.file:
+        for f in args.file:
+            for thread in f:
+                threads.append(ChanThread(thread.strip(), downdir))
 
-# Download each thread
-for thread in threads:
-    thread.update_info()
-    thread.download_files()
+    # Read threads from the arguments
+    for thread in args.thread:
+        threads.append(ChanThread(thread.strip(), downdir))
 
-logging.info('Completed all downloads')
+    # Download each thread
+    for thread in threads:
+        thread.update_info()
+        thread.download_files()
+
+    logging.info('Completed all downloads')
