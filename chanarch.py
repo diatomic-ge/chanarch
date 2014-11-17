@@ -42,11 +42,8 @@ licensenotice = textwrap.dedent('''\
 
 # Python 3 renamed modules
 if sys.version_info.major == 2:
-    from urllib2 import Request, urlopen, HTTPError
     from httplib import HTTPConnection, HTTPSConnection
 else:
-    from urllib.request import Request, urlopen
-    from urllib.error import HTTPError
     from http.client import HTTPConnection, HTTPSConnection
 
 class InvalidURLError(ValueError):
@@ -85,14 +82,17 @@ class ChanThread(object):
     Attributes:
       board (str): Which 4chan board the thread is on
       downdir (str): Download directory for this thread
-      jsonurl (str): URL of the thread's JSON
+      jserver (str): The server hosting the thread JSON
+      jsonpath (str): The path to the thread's JSON on jserver
       linkfile (str): Name of the file to scrape links into
       thread_is_dead (bool): If true, thread 404'd
       threadinfo (dict): Parsed JSON as a dictionary
+      timeout (int): Timeout value for connections
       usehttps (bool): If true, use HTTPS rather than HTTP
     """
 
-    def __init__(self, thread, downdir, mksubdir=True, linkfile=None):
+    def __init__(self, thread, downdir, mksubdir=True, linkfile=None,
+                 timeout=None):
         """
         Initialize a ChanThread object.
 
@@ -106,16 +106,18 @@ class ChanThread(object):
           downdir (str): The directory to download files to
           mksubdir (bool): If true, download into downdir/[THREAD_NUMBER]
           linkfile (str): The file to scrape links into
+          timeout (int): Timeout value for connections
         """
 
         self.board = None
         self.downdir = None
-        self.jsonurl = None
+        self.jserver = None
+        self.jsonpath = None
         self.linkfile = None
         self.thread_is_dead = None
         self.threadinfo = None
+        self.timeout = timeout
         self.usehttps = None
-
 
         self.set_thread(thread, downdir, mksubdir=mksubdir, linkfile=linkfile)
 
@@ -142,14 +144,10 @@ class ChanThread(object):
         self.board = threadinfo[1]
         self.threadid = threadinfo[2]
 
-        # Build JSON URL
-        if self.usehttps == True:
-            jserver = 'https://a.4cdn.org/'
-        else:
-            jserver = 'http://a.4cdn.org/'
-
-        boardurl = ''.join([jserver, self.board])
-        self.jsonurl = ''.join([boardurl, '/thread/', self.threadid, '.json'])
+        # Build JSON URL parts
+        self.jserver = 'a.4cdn.org'
+        self.jsonpath = ''.join(['/', self.board, '/thread/', self.threadid,
+                                 '.json'])
 
         # Set download directory
         downdir = os.path.expanduser(downdir)
@@ -212,22 +210,31 @@ class ChanThread(object):
         logging.debug('Downloading /%s/thread/%s JSON' %
                       (self.board, self.threadid))
 
-        # Download the JSON
-        req = Request(self.jsonurl)
+        # Establish proper type of connection
+        if self.usehttps:
+            conntype = HTTPSConnection
+        else:
+            conntype = HTTPConnection
+
+        if self.timeout:
+            conn = conntype(self.jserver, timeout=self.timeout)
+        else:
+            conn = conntype(self.jserver, timeout=self.timeout)
+
+        # Request the JSON
+        conn.request('GET', self.jsonpath)
+        resp = conn.getresponse()
 
         # Catch 404s
-        try:
-            resp = urlopen(req)
-        except HTTPError as err:
-            if err.getcode() == 404:
-                logging.debug('/%s/thread/%s 404\'d' %
-                             (self.board, self.threadid))
-                self.thread_is_dead = True
-                return
-            else:
-                raise
+        if resp.status == 404:
+            logging.debug('/%s/thread/%s 404\'d' % (self.board, self.threadid))
+            self.thread_is_dead = True
+            conn.close()
+            return
 
+        # Read and close the connection
         jsontxt = resp.read()
+        conn.close()
 
         # Decode the JSON
         self.threadinfo = json.loads(jsontxt.decode())
@@ -251,7 +258,7 @@ class ChanThread(object):
         # Check if we're using HTTPS or HTTP for the server
         imgserver = 'i.4cdn.org'
 
-        down = Downloader(imgserver, self.usehttps)
+        down = Downloader(imgserver, self.usehttps, timeout=self.timeout)
 
         # Loop over each post
         for post in self.threadinfo['posts']:
@@ -347,10 +354,11 @@ class Downloader(object):
     Attributes:
       conn (HTTP(S)Connection): The current connection
       server (str): The server to connnect to
+      timeout (int): Timeout value for connections (seconds)
       usehttps (bool): Whether to use HTTPS instead of HTTP
     """
 
-    def __init__(self, server, usehttps):
+    def __init__(self, server, usehttps, timeout=None):
         """
         Initialize the downloader
 
@@ -359,10 +367,12 @@ class Downloader(object):
         Args:
           server (str): The server to connect to
           usehttps (bool): Whether to use HTTPS instead of HTTP
+          timeout (int): Timeout value for connections (seconds)
         """
 
         self.conn = None
         self.server = None
+        self.timeout = timeout
         self.usehttps = None
         self.set_server(server, usehttps)
 
@@ -435,9 +445,14 @@ class Downloader(object):
         # Open a connection
         if (self.conn is None):
             if self.usehttps:
-                self.conn = HTTPSConnection(self.server)
+                conntype = HTTPSConnection
             else:
-                self.conn = HTTPConnection(self.server)
+                conntype = HTTPConnection
+
+            if self.timeout:
+                self.conn = conntype(self.server, timeout=self.timeout)
+            else:
+                self.conn = conntype(self.server)
         else:
             logging.debug('Reusing existing connection to %s' % (self.server))
 
@@ -482,6 +497,8 @@ if __name__ == '__main__':
     # Argument parsing
     parser = argparse.ArgumentParser(description='Download the files of 4chan'
                                      'threads')
+
+    # Download options
     parser.add_argument('-f', '--file', help='list of threads in a file',
                         type=argparse.FileType('r'), action='append')
     parser.add_argument('-d', '--directory',
@@ -489,6 +506,11 @@ if __name__ == '__main__':
     parser.add_argument('-l', '--linkfile', help='file to scrape links into')
     parser.add_argument('thread', help='thread URLs', nargs='*')
 
+    # Behavior options
+    parser.add_argument('--timeout', type=int, default=15,
+                        help='Connection timeout in seconds')
+
+    # Verbosity
     g = parser.add_mutually_exclusive_group()
     g.add_argument('-q', '--quiet', help='be quiet', action='store_true')
     g.add_argument('-v', '--verbose', help='increase verbosity',
@@ -496,6 +518,7 @@ if __name__ == '__main__':
     g.add_argument('--debug', help='debug-level verbosity',
                    action='store_true')
 
+    # Actions
     parser.add_argument('-V', '--version', help='print version and exit',
                         action='store_true')
 
@@ -536,12 +559,14 @@ if __name__ == '__main__':
             for f in args.file:
                 for thread in f:
                     threads.append(ChanThread(thread.strip(), downdir,
-                                              linkfile=args.linkfile))
+                                              linkfile=args.linkfile,
+                                              timeout=args.timeout))
 
         # Read threads from the arguments
         for thread in args.thread:
             threads.append(ChanThread(thread.strip(), downdir,
-                                      linkfile=args.linkfile))
+                                      linkfile=args.linkfile,
+                                      timeout=args.timeout))
 
     except (InvalidURLError) as err:
         sys.exit('Invalid URL: \'%s\', expected %s' %
