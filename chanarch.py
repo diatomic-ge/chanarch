@@ -31,7 +31,7 @@ import textwrap
 
 # Program information
 progname = 'Chanarch'
-version = '0.1.1'
+version = '0.1.2-beta'
 version_string = ''.join([progname, ' ', version])
 copyright = 'Copyright (C) 2014 diatomic.ge'
 licensenotice = textwrap.dedent('''\
