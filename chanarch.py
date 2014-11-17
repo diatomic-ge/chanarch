@@ -28,6 +28,7 @@ import os.path
 import re
 import sys
 import textwrap
+import time
 
 # Program information
 progname = 'Chanarch'
@@ -547,6 +548,8 @@ if __name__ == '__main__':
                  (err.url, err.urldesc))
 
     # Download each thread
+    starttime = time.time()
+
     for tnum, thread in enumerate(threads, start=1):
         # Get thread info
         thread.update_info()
@@ -560,4 +563,4 @@ if __name__ == '__main__':
         logging.info('Downloading thread: %d/%d' % (tnum, len(threads)))
         thread.download_files()
 
-    logging.info('Completed all downloads')
+    logging.info('Completed all downloads in %ds' % (time.time() - starttime))
