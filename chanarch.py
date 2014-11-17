@@ -86,6 +86,7 @@ class ChanThread(object):
       jsonpath (str): The path to the thread's JSON on jserver
       linkfile (str): Name of the file to scrape links into
       thread_is_dead (bool): If true, thread 404'd
+      threadid (str): The thread number as a string
       threadinfo (dict): Parsed JSON as a dictionary
       timeout (int): Timeout value for connections
       usehttps (bool): If true, use HTTPS rather than HTTP
@@ -120,6 +121,22 @@ class ChanThread(object):
         self.usehttps = None
 
         self.set_thread(thread, downdir, mksubdir=mksubdir, linkfile=linkfile)
+
+    def get_threadid(self):
+        """
+        Return a thread identifier.
+
+        Return a tuple (board, threadnumber) which identifies that 4chan thread
+        uniquely. This can be used to remove duplicate threads, or index them in
+        a dictionary.
+
+        Returns:
+          tuple(board, threadnumber):
+            board (str): The name of the 4chan board
+            threadnumber (str): The thread number
+        """
+
+        return (self.board, self.threadid)          
 
     def set_thread(self, threadurl, downdir, mksubdir=True, linkfile=None):
         """
@@ -550,23 +567,39 @@ if __name__ == '__main__':
     # Read the download directory
     downdir = args.directory
 
-    # Build thread list
-    threads = []
+    # Build thread dictionary
+    threads = {}
 
     # Read the file(s)
     try:
         if args.file:
             for f in args.file:
                 for thread in f:
-                    threads.append(ChanThread(thread.strip(), downdir,
-                                              linkfile=args.linkfile,
-                                              timeout=args.timeout))
+                    t = ChanThread(thread.strip(), downdir,
+                                   linkfile=args.linkfile,
+                                   timeout=args.timeout)
+
+                    # Check if thread is already present before adding
+                    tid = t.get_threadid()
+                    if not tid in threads:
+                        threads[tid] = t
+                    else:
+                        logging.debug('Duplicate thread: \'/%s/thread/%s\'' %
+                                      (tid[0], tid[1]))
 
         # Read threads from the arguments
         for thread in args.thread:
-            threads.append(ChanThread(thread.strip(), downdir,
-                                      linkfile=args.linkfile,
-                                      timeout=args.timeout))
+            t = ChanThread(thread.strip(), downdir,
+                       linkfile=args.linkfile,
+                       timeout=args.timeout)
+
+            # Check if thread is already present before adding
+            tid = t.get_threadid()
+            if not tid in threads:
+                threads[tid] = t
+            else:
+                logging.debug('Duplicate thread: \'/%s/thread/%s\'' %
+                              (tid[0], tid[1]))
 
     except (InvalidURLError) as err:
         sys.exit('Invalid URL: \'%s\', expected %s' %
@@ -575,7 +608,9 @@ if __name__ == '__main__':
     # Download each thread
     starttime = time.time()
 
-    for tnum, thread in enumerate(threads, start=1):
+    for tnum, threadid in enumerate(threads, start=1):
+        thread = threads[threadid]
+
         # Get thread info
         thread.update_info()
 
