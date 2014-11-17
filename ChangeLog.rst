@@ -2,6 +2,12 @@
 Changelog
 =========
 
+0.1.2 (2014-11-16)
+------------------
+
+- Cleanly handle and show an error if given an invalid 4chan thread URL
+- Allow users to ``import chanarch`` without trying to download threads
+
 0.1.1 (2014-11-16)
 ------------------
 

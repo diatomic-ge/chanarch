@@ -48,6 +48,35 @@ else:
     from urllib.error import HTTPError
     from http.client import HTTPConnection, HTTPSConnection
 
+class InvalidURLError(ValueError):
+    """
+    This exception is raised for invalid URLs
+
+    Attributes:
+      url (str): The invalid URL
+      urldesc (str): A description of the expected valid URL, or None
+    """
+
+    def __init__(self, url, urldesc=None):
+        """
+        Initialize the invalid URL exception
+
+        Arguments:
+          url (str): The invalid URL
+          urldesc (str): A description of the expected valid URL
+        """
+
+        # Save values
+        self.url = url
+        self.urldesc = urldesc
+
+        # Initialize exception stuff
+        if urldesc:
+            ValueError.__init__(self, 'Invalid URL: \'%s\', expected %s' %
+                                (url, urldesc))
+        else:
+            ValueError.__init__(self, 'Invalid URL: \'%s\'' % url)
+
 class ChanThread(object):
     """
     This class implements a downloader for a 4chan thread.
@@ -68,6 +97,8 @@ class ChanThread(object):
 
         Set up a ChanThread object with its thread information, i.e. its board
         and threadnumber, both parsed from the string thread.
+
+        Raise InvalidURLError if threadurl is not a valid 4chan thread URL
 
         Args:
           thread (str): A 4chan thread URL
@@ -93,6 +124,8 @@ class ChanThread(object):
 
         Given a 4chan thread URL and a download directory, parse and set the
         components of the thread URL, as well as the download directory.
+
+        Raise InvalidURLError if threadurl is not a valid 4chan thread URL
 
         Args:
           threadurl (str): A 4chan thread URL
@@ -135,6 +168,8 @@ class ChanThread(object):
         Given a string with a 4chan URL, return a tuple of whether or not HTTPS
         is used, and the board and thread number as strings.
 
+        Raise InvalidURLError if threadurl is not a valid 4chan thread URL
+
         Args:
           threadurl (str): A 4chan thread URL
 
@@ -150,6 +185,10 @@ class ChanThread(object):
 
         # Parse the URL with a regex
         m = re.search(urlregex, threadurl)
+
+        # Check for invalid URL
+        if m is None:
+            raise InvalidURLError(threadurl, '4chan thread URL')
 
         # Get the components
         if m.group(1) == 's':
@@ -436,79 +475,89 @@ class Downloader(object):
         # Close the file
         outfile.close()
 
-# Argument parsing
-parser = argparse.ArgumentParser(description='Download the files of 4chan threads')
-parser.add_argument('-f', '--file', help='list of threads in a file',
-                    type=argparse.FileType('r'), action='append')
-parser.add_argument('-d', '--directory',
-                    help='download directory (defaults to .)', default='.')
-parser.add_argument('-l', '--linkfile', help='file to scrape links into')
-parser.add_argument('thread', help='thread URLs', nargs='*')
+# Only run if called as a script
+if __name__ == '__main__':
 
-g = parser.add_mutually_exclusive_group()
-g.add_argument('-q', '--quiet', help='be quiet', action='store_true')
-g.add_argument('-v', '--verbose', help='increase verbosity',
-               action='store_true')
-g.add_argument('--debug', help='debug-level verbosity',
-               action='store_true')
+    # Argument parsing
+    parser = argparse.ArgumentParser(description='Download the files of 4chan'
+                                     'threads')
+    parser.add_argument('-f', '--file', help='list of threads in a file',
+                        type=argparse.FileType('r'), action='append')
+    parser.add_argument('-d', '--directory',
+                        help='download directory (defaults to .)', default='.')
+    parser.add_argument('-l', '--linkfile', help='file to scrape links into')
+    parser.add_argument('thread', help='thread URLs', nargs='*')
 
-parser.add_argument('-V', '--version', help='print version and exit',
-                    action='store_true')
+    g = parser.add_mutually_exclusive_group()
+    g.add_argument('-q', '--quiet', help='be quiet', action='store_true')
+    g.add_argument('-v', '--verbose', help='increase verbosity',
+                   action='store_true')
+    g.add_argument('--debug', help='debug-level verbosity',
+                   action='store_true')
 
-args = parser.parse_args()
+    parser.add_argument('-V', '--version', help='print version and exit',
+                        action='store_true')
 
-# Version printing
-if args.version:
-    # Print version, copyright, and license notice and exit
-    print(version_string)
-    print(copyright)
-    print(licensenotice)
-    sys.exit()
+    args = parser.parse_args()
 
-# If we didn't read any 'actions' or threads, print help
-if (not args.file) and (not args.thread):
-    parser.print_help()
-    sys.exit()
+    # Version printing
+    if args.version:
+        # Print version, copyright, and license notice and exit
+        print(version_string)
+        print(copyright)
+        print(licensenotice)
+        sys.exit()
 
-# Logging mode, go!
-if args.debug:
-    logging.basicConfig(level=logging.DEBUG)
-elif args.verbose:
-    logging.basicConfig(level=logging.INFO)
-elif args.quiet:
-    logging.basicConfig(level=logging.ERROR)
-else:
-    logging.basicConfig(level=logging.WARN)
+    # If we didn't read any 'actions' or threads, print help
+    if (not args.file) and (not args.thread):
+        parser.print_help()
+        sys.exit()
 
-# Read the download directory
-downdir = args.directory
+    # Logging mode, go!
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    elif args.verbose:
+        logging.basicConfig(level=logging.INFO)
+    elif args.quiet:
+        logging.basicConfig(level=logging.ERROR)
+    else:
+        logging.basicConfig(level=logging.WARN)
 
-# Build thread list
-threads = []
+    # Read the download directory
+    downdir = args.directory
 
-# Read the file(s)
-if args.file:
-    for f in args.file:
-        for thread in f:
+    # Build thread list
+    threads = []
+
+    # Read the file(s)
+    try:
+        if args.file:
+            for f in args.file:
+                for thread in f:
+                    threads.append(ChanThread(thread.strip(), downdir,
+                                              linkfile=args.linkfile))
+
+        # Read threads from the arguments
+        for thread in args.thread:
             threads.append(ChanThread(thread.strip(), downdir,
                                       linkfile=args.linkfile))
 
-# Read threads from the arguments
-for thread in args.thread:
-    threads.append(ChanThread(thread.strip(), downdir, linkfile=args.linkfile))
+    except (InvalidURLError) as err:
+        sys.exit('Invalid URL: \'%s\', expected %s' %
+                 (err.url, err.urldesc))
 
-# Download each thread
-for tnum, thread in enumerate(threads, start=1):
-    # Get thread info
-    thread.update_info()
+    # Download each thread
+    for tnum, thread in enumerate(threads, start=1):
+        # Get thread info
+        thread.update_info()
 
-    # Scrape links
-    if args.linkfile:
-        logging.info('Scraping links: %d/%d' % (tnum, len(threads)))
-        thread.scrape_links()
+        # Scrape links
+        if args.linkfile:
+            logging.info('Scraping links: %d/%d' % (tnum, len(threads)))
+            thread.scrape_links()
 
-    # Download files
-    logging.info('Downloading thread: %d/%d' % (tnum, len(threads)))
-    thread.download_files()
+        # Download files
+        logging.info('Downloading thread: %d/%d' % (tnum, len(threads)))
+        thread.download_files()
 
-logging.info('Completed all downloads')
+    logging.info('Completed all downloads')
