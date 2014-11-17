@@ -48,6 +48,35 @@ else:
     from urllib.error import HTTPError
     from http.client import HTTPConnection, HTTPSConnection
 
+class InvalidURLError(ValueError):
+    """
+    This exception is raised for invalid URLs
+
+    Attributes:
+      url (str): The invalid URL
+      urldesc (str): A description of the expected valid URL, or None
+    """
+
+    def __init__(self, url, urldesc=None):
+        """
+        Initialize the invalid URL exception
+
+        Arguments:
+          url (str): The invalid URL
+          urldesc (str): A description of the expected valid URL
+        """
+
+        # Save values
+        self.url = url
+        self.urldesc = urldesc
+
+        # Initialize exception stuff
+        if urldesc:
+            ValueError.__init__(self, 'Invalid URL: \'%s\', expected %s' %
+                                (url, urldesc))
+        else:
+            ValueError.__init__(self, 'Invalid URL: \'%s\'' % url)
+
 class ChanThread(object):
     """
     This class implements a downloader for a 4chan thread.
@@ -67,6 +96,8 @@ class ChanThread(object):
 
         Set up a ChanThread object with its thread information, i.e. its board
         and threadnumber, both parsed from the string thread.
+
+        Raise InvalidURLError if threadurl is not a valid 4chan thread URL
 
         Args:
           thread (str): A 4chan thread URL
@@ -89,6 +120,8 @@ class ChanThread(object):
 
         Given a 4chan thread URL and a download directory, parse and set the
         components of the thread URL, as well as the download directory.
+
+        Raise InvalidURLError if threadurl is not a valid 4chan thread URL
 
         Args:
           threadurl (str): A 4chan thread URL
@@ -127,6 +160,8 @@ class ChanThread(object):
         Given a string with a 4chan URL, return a tuple of whether or not HTTPS
         is used, and the board and thread number as strings.
 
+        Raise InvalidURLError if threadurl is not a valid 4chan thread URL
+
         Args:
           threadurl (str): A 4chan thread URL
 
@@ -142,6 +177,10 @@ class ChanThread(object):
 
         # Parse the URL with a regex
         m = re.search(urlregex, threadurl)
+
+        # Check for invalid URL
+        if m is None:
+            raise InvalidURLError(threadurl, '4chan thread URL')
 
         # Get the components
         if m.group(1) == 's':
@@ -415,14 +454,19 @@ if __name__ == '__main__':
     threads = []
 
     # Read the file(s)
-    if args.file:
-        for f in args.file:
-            for thread in f:
-                threads.append(ChanThread(thread.strip(), downdir))
+    try:
+        if args.file:
+            for f in args.file:
+                for thread in f:
+                    threads.append(ChanThread(thread.strip(), downdir))
 
-    # Read threads from the arguments
-    for thread in args.thread:
-        threads.append(ChanThread(thread.strip(), downdir))
+        # Read threads from the arguments
+        for thread in args.thread:
+            threads.append(ChanThread(thread.strip(), downdir))
+
+    except (InvalidURLError) as err:
+        sys.exit('Invalid URL: \'%s\', expected %s' %
+                 (err.url, err.urldesc))
 
     # Download each thread
     for thread in threads:
