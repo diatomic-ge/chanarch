@@ -26,6 +26,7 @@ import json
 import logging
 import os.path
 import re
+import ssl
 import sys
 import textwrap
 import time
@@ -282,7 +283,6 @@ class ChanThread(object):
             tim = post.get('tim')
             ext = post.get('ext')
             filedeleted = post.get('filedeleted')
-            filesz = post.get('fsize')
 
             # If there's a file in this post, download it
             if (ext is not None) and (filedeleted != 1):
@@ -292,7 +292,7 @@ class ChanThread(object):
                 url = ''.join(['/', self.board, '/', filename])
 
                 # Download the file
-                down.download(url, filepath, totsz=filesz)
+                down.download(url, filepath)
 
         # Close the connection
         down.close()
@@ -418,6 +418,17 @@ class Downloader(object):
         self.server = server
         self.usehttps = usehttps
 
+        # Set connection parameters
+        if usehttps:
+            conntype = HTTPSConnection
+        else:
+            conntype = HTTPConnection
+
+        if self.timeout:
+            self.conn = conntype(server, timeout=self.timeout)
+        else:
+            self.conn = conntype(server)
+
     def close(self):
         """
         Close active connection, if open
@@ -428,7 +439,7 @@ class Downloader(object):
 
         self.conn = None
 
-    def download(self, servpath, filepath, totsz=None):
+    def download(self, servpath, filepath):
         """
         Download a file from the server
 
@@ -439,7 +450,6 @@ class Downloader(object):
         Args:
           servpath (str): The path to the file on the server
           filepath (str): The path to download the file as
-          totsz (int): The total size of the file, if known
         """
 
         # Create the download directory if it doesn't exist already
@@ -450,58 +460,62 @@ class Downloader(object):
 
         # Open the file and get the current position
         outfile = open(filepath, 'ab')
-        filepos = os.path.getsize(filepath)
+
+        # Get the file size from the server
+        self.conn.request('HEAD', servpath,
+                          headers = {'Connection': 'keep-alive'})
+        resp = self.conn.getresponse()
+        filesize = int(resp.getheader('Content-Length'))
+
+        # Make sure to read the response, or else httplib will error
+        resp.read()
 
         # Check if the file is already downloaded (if total size is known)
-        if totsz:
-            if filepos == totsz:
-                # Download already completed
-                logging.debug('Requested length already downloaded')
-                return
-
-        # Open a connection
-        if (self.conn is None):
-            if self.usehttps:
-                conntype = HTTPSConnection
-            else:
-                conntype = HTTPConnection
-
-            if self.timeout:
-                self.conn = conntype(self.server, timeout=self.timeout)
-            else:
-                self.conn = conntype(self.server)
-        else:
-            logging.debug('Reusing existing connection to %s' % (self.server))
-
-        self.conn.request('GET', servpath, headers =
-                          {'Connection': ' keep-alive',
-                           'Range': ' bytes=%d-' % (filepos)})
-
-        resp = self.conn.getresponse()
-
-        # If we got code 416, the file's already downloaded completely
-        # Read whatever might be left and return
-        if resp.status == 416:
+        if outfile.tell() == filesize:
+            # Download already completed
             logging.debug('File already downloaded')
-            resp.read()
+            return
+        if outfile.tell() > filesize:
+            # Our downloaded file is larger than the reported size
+            logging.warn('File \'%s\' is larger than the server copy!' %
+                         (filepath))
             return
 
-        # Download the file incrementally (it's more resumable)
-        block_sz = 16384
-
         logging.debug('Downloading %s to %s, starting at byte %d' %
-                      (servpath, filepath, filepos))
+                      (servpath, filepath, outfile.tell()))
 
-        # Download/write loop
-        while True:
-            buff = resp.read(block_sz)
+        # Download the file
+        while outfile.tell() < filesize:
+            try:
+                # Request the file
+                self.conn.request('GET', servpath, headers =
+                                  {'Connection': ' keep-alive',
+                                   'Range': ' bytes=%d-' %
+                                            (outfile.tell())})
 
-            # Check if we're done downloading
-            if not buff:
-                break
+                resp = self.conn.getresponse()
 
-            # Write
-            outfile.write(buff)
+                # Download the file incrementally (it's more resumable)
+                block_sz = 16384
+
+
+                # Download/write loop
+                while True:
+                    buff = resp.read(block_sz)
+
+                    # Check if we're done downloading
+                    if not buff:
+                        break
+
+                    # Write
+                    outfile.write(buff)
+
+            except ssl.SSLError as err:
+                # If the SSL connection timed out, notify and continue
+                if err.args[0] == 'The read operation timed out':
+                    logging.debug('Connection timed out. Retrying.')
+                else:
+                    raise
 
         logging.debug('File download completed')
 
