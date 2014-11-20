@@ -477,9 +477,11 @@ class Downloader(object):
             return
         if outfile.tell() > filesize:
             # Our downloaded file is larger than the reported size
-            logging.warn('File \'%s\' is larger than the server copy!' %
-                         (filepath))
-            return
+            logging.warn('File \'%s\' is larger than the server copy!'
+                         'Truncating...' % (filepath))
+            # Seek to the beginning of the file and truncate
+            outfile.seek(0)
+            outfile.truncate()
 
         logging.debug('Downloading %s to %s, starting at byte %d' %
                       (servpath, filepath, outfile.tell()))
