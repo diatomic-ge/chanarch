@@ -129,6 +129,24 @@ class ChanThread(object):
 
         self.set_thread(thread, downdir, mksubdir=mksubdir, linkfile=linkfile)
 
+        # Try to read the saved files dictionary
+        filesjson = os.path.join(self.downdir, ''.join([self.threadid, '.json']))
+        if os.path.exists(filesjson):
+            self.files = json.load(open(filesjson))
+            logging.debug('Read file info JSON')
+
+    def save_fileinfo(self):
+        """
+        Save the files info to the JSON
+        """
+
+        filesjson = os.path.join(self.downdir, ''.join([self.threadid, '.json']))
+        if os.path.exists(self.downdir):
+            f = open(filesjson, 'w')
+            json.dump(self.files, f)
+            f.close()
+            logging.debug('Saved file info JSON')
+
     def get_threadid(self):
         """
         Return a thread identifier.
@@ -481,6 +499,7 @@ class Downloader(object):
 
         # If the file is exactly fsize, just return
         if os.path.exists(filepath) and os.path.getsize(filepath) == fsize:
+            logging.debug('Skipping already downloaded file')
             return None
 
         # Open the file and get the current position
@@ -671,5 +690,8 @@ if __name__ == '__main__':
         # Download files
         logging.info('Downloading thread: %d/%d' % (tnum, len(threads)))
         thread.download_files()
+
+        # Save file info
+        thread.save_fileinfo()
 
     logging.info('Completed all downloads in %ds' % (time.time() - starttime))
