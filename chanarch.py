@@ -106,6 +106,11 @@ class ChanThread(object):
         Args:
           thread (str): A 4chan thread URL
           downdir (str): The directory to download files to
+          files (dict): The dictionary of file information, indexed by filename,
+                        with each value being a dictionary of file information,
+                        including:
+                          fsize: The size of the file on the server, or None if
+                                 not known
           mksubdir (bool): If true, download into downdir/[THREAD_NUMBER]
           linkfile (str): The file to scrape links into
           timeout (int): Timeout value for connections
@@ -113,6 +118,7 @@ class ChanThread(object):
 
         self.board = None
         self.downdir = None
+        self.files = {}
         self.jserver = None
         self.jsonpath = None
         self.linkfile = None
@@ -257,6 +263,18 @@ class ChanThread(object):
         # Decode the JSON
         self.threadinfo = json.loads(jsontxt.decode())
 
+        # Build file list
+        for post in self.threadinfo['posts']:
+            tim = post.get('tim')
+            ext = post.get('ext')
+            filedeleted = post.get('filedeleted')
+
+            # If a new file, add it with None as the filesize
+            if (ext is not None) and (filedeleted != 1):
+                filename = ''.join([str(tim), ext])
+                if filename not in self.files:
+                    self.files[filename] = {'fsize': None}
+
     def download_files(self):
         """
         Download all files in the thread.
@@ -278,21 +296,18 @@ class ChanThread(object):
 
         down = Downloader(imgserver, self.usehttps, timeout=self.timeout)
 
-        # Loop over each post
-        for post in self.threadinfo['posts']:
-            tim = post.get('tim')
-            ext = post.get('ext')
-            filedeleted = post.get('filedeleted')
+        # Loop over each file
+        for img in self.files:
+            # Build the download location
+            filepath = os.path.join(self.downdir, img)
+            url = ''.join(['/', self.board, '/', img])
 
-            # If there's a file in this post, download it
-            if (ext is not None) and (filedeleted != 1):
-                # Build the download location
-                filename = ''.join([str(tim), ext])
-                filepath = os.path.join(self.downdir, filename)
-                url = ''.join(['/', self.board, '/', filename])
+            # Download the file
+            size = down.download(url, filepath, fsize=self.files[img]['fsize'])
 
-                # Download the file
-                down.download(url, filepath)
+            # If the file download wasn't skipped, store the size
+            if size:
+                self.files[img]['fsize'] = size
 
         # Close the connection
         down.close()
@@ -439,17 +454,23 @@ class Downloader(object):
 
         self.conn = None
 
-    def download(self, servpath, filepath):
+    def download(self, servpath, filepath, fsize=None):
         """
         Download a file from the server
 
         Download servpath to filepath, opening a connection if one isn't
         already open, otherwise reuse the current one. If the file exists,
-        resume downloading, otherwise start downloading.
+        resume downloading, truncating the file if it's larger than the server
+        size, otherwise start downloading.
 
         Args:
           servpath (str): The path to the file on the server
           filepath (str): The path to download the file as
+          fsize (int): Filesize, if known
+        
+        Returns:
+          (int): Total size of the file, if downloaded
+          None: The file was exactly fsize and wasn't downloaded
         """
 
         # Create the download directory if it doesn't exist already
@@ -458,6 +479,10 @@ class Downloader(object):
             logging.debug('Creating directory: %s' % (outdir))
             os.makedirs(outdir)
 
+        # If the file is exactly fsize, just return
+        if os.path.exists(filepath) and os.path.getsize(filepath) == fsize:
+            return None
+
         # Open the file and get the current position
         outfile = open(filepath, 'ab')
 
@@ -465,6 +490,13 @@ class Downloader(object):
         self.conn.request('HEAD', servpath,
                           headers = {'Connection': 'keep-alive'})
         resp = self.conn.getresponse()
+
+        if resp.status != 200:
+            # File is probably no longer available
+            logging.debug('Got status code %d, skipping download' %
+                          (resp.status))
+            return None
+
         filesize = int(resp.getheader('Content-Length'))
 
         # Make sure to read the response, or else httplib will error
@@ -474,7 +506,7 @@ class Downloader(object):
         if outfile.tell() == filesize:
             # Download already completed
             logging.debug('File already downloaded')
-            return
+            return filesize
         if outfile.tell() > filesize:
             # Our downloaded file is larger than the reported size
             logging.warn('File \'%s\' is larger than the server copy!'
@@ -486,6 +518,9 @@ class Downloader(object):
         logging.debug('Downloading %s to %s, starting at byte %d' %
                       (servpath, filepath, outfile.tell()))
 
+        # Download the file incrementally (it's more resumable)
+        block_sz = 16384
+
         # Download the file
         while outfile.tell() < filesize:
             try:
@@ -496,10 +531,6 @@ class Downloader(object):
                                             (outfile.tell())})
 
                 resp = self.conn.getresponse()
-
-                # Download the file incrementally (it's more resumable)
-                block_sz = 16384
-
 
                 # Download/write loop
                 while True:
@@ -523,6 +554,8 @@ class Downloader(object):
 
         # Close the file
         outfile.close()
+
+        return filesize
 
 # Only run if called as a script
 if __name__ == '__main__':
