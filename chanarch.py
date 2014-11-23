@@ -43,9 +43,9 @@ licensenotice = textwrap.dedent('''\
 
 # Python 3 renamed modules
 if sys.version_info.major == 2:
-    from httplib import HTTPConnection, HTTPSConnection
+    from httplib import HTTPConnection, HTTPSConnection, BadStatusLine, ResponseNotReady
 else:
-    from http.client import HTTPConnection, HTTPSConnection
+    from http.client import HTTPConnection, HTTPSConnection, BadStatusLine, ResponseNotReady
 
 class InvalidURLError(ValueError):
     """
@@ -84,6 +84,7 @@ class ChanThread(object):
       board (str): Which 4chan board the thread is on
       downdir (str): Download directory for this thread
       jserver (str): The server hosting the thread JSON
+      jsonconn (HTTP(S)Connection): The connection to download JSON with
       jsonpath (str): The path to the thread's JSON on jserver
       linkfile (str): Name of the file to scrape links into
       thread_is_dead (bool): If true, thread 404'd
@@ -94,7 +95,7 @@ class ChanThread(object):
     """
 
     def __init__(self, thread, downdir, mksubdir=True, linkfile=None,
-                 timeout=None):
+                 timeout=None, conn=None):
         """
         Initialize a ChanThread object.
 
@@ -105,6 +106,9 @@ class ChanThread(object):
 
         Args:
           thread (str): A 4chan thread URL
+          conn (HTTP(S)Connection): Connection to (re)use for JSON downloads.
+                                    Overrides selecting the protocol matching
+                                    the URL
           downdir (str): The directory to download files to
           files (dict): The dictionary of file information, indexed by filename,
                         with each value being a dictionary of file information,
@@ -120,6 +124,7 @@ class ChanThread(object):
         self.downdir = None
         self.files = {}
         self.jserver = None
+        self.jsonconn = conn
         self.jsonpath = None
         self.linkfile = None
         self.thread_is_dead = None
@@ -161,7 +166,7 @@ class ChanThread(object):
             threadnumber (str): The thread number
         """
 
-        return (self.board, self.threadid)          
+        return (self.board, self.threadid)
 
     def set_thread(self, threadurl, downdir, mksubdir=True, linkfile=None):
         """
@@ -252,31 +257,55 @@ class ChanThread(object):
         logging.debug('Downloading /%s/thread/%s JSON' %
                       (self.board, self.threadid))
 
-        # Establish proper type of connection
-        if self.usehttps:
-            conntype = HTTPSConnection
+        # Check if we're reusing a connection
+        if self.jsonconn:
+            conn = self.jsonconn
         else:
-            conntype = HTTPConnection
+            # Establish proper type of connection
+            if self.usehttps:
+                conntype = HTTPSConnection
+            else:
+                conntype = HTTPConnection
 
-        if self.timeout:
-            conn = conntype(self.jserver, timeout=self.timeout)
-        else:
-            conn = conntype(self.jserver, timeout=self.timeout)
+            if self.timeout:
+                conn = conntype(self.jserver, timeout=self.timeout)
+            else:
+                conn = conntype(self.jserver, timeout=self.timeout)
 
         # Request the JSON
-        conn.request('GET', self.jsonpath)
-        resp = conn.getresponse()
+
+        # Catch bad status lines
+        try:
+            conn.request('GET', self.jsonpath,
+                         headers = {'Connection': 'keep-alive'})
+            resp = conn.getresponse()
+        except (BadStatusLine, ResponseNotReady):
+            logging.warn('Got exception while reading \'/%s/thread/%s\' JSON. '
+                         'Retrying.' % (self.board, self.threadid))
+            conn.close()
+
+            try:
+                conn.request('GET', self.jsonpath,
+                             headers = {'Connection': 'keep-alive'})
+                resp = conn.getresponse()
+            except (BadStatusLine, ResponseNotReady):
+                logging.warn('Could not read JSON')
+                conn.close()
+                return
 
         # Catch 404s
         if resp.status == 404:
             logging.debug('/%s/thread/%s 404\'d' % (self.board, self.threadid))
             self.thread_is_dead = True
-            conn.close()
+            resp.read()
+            if not self.jsonconn:
+                conn.close()
             return
 
-        # Read and close the connection
+        # Read and close the connection if we opened it
         jsontxt = resp.read()
-        conn.close()
+        if not self.jsonconn:
+            conn.close()
 
         # Decode the JSON
         self.threadinfo = json.loads(jsontxt.decode())
@@ -485,7 +514,7 @@ class Downloader(object):
           servpath (str): The path to the file on the server
           filepath (str): The path to download the file as
           fsize (int): Filesize, if known
-        
+
         Returns:
           (int): Total size of the file, if downloaded
           None: The file was exactly fsize and wasn't downloaded
@@ -506,9 +535,20 @@ class Downloader(object):
         outfile = open(filepath, 'ab')
 
         # Get the file size from the server
-        self.conn.request('HEAD', servpath,
-                          headers = {'Connection': 'keep-alive'})
-        resp = self.conn.getresponse()
+        try:
+            self.conn.request('HEAD', servpath,
+                              headers = {'Connection': 'keep-alive'})
+            resp = self.conn.getresponse()
+        except (BadStatusLine, ResponseNotReady):
+            logging.warn('Got exception while downloading. Retrying.')
+            self.conn.close()
+            try:
+                self.conn.request('HEAD', servpath,
+                                  headers = {'Connection': 'keep-alive'})
+                resp = self.conn.getresponse()
+            except (BadStatusLine, ResponseNotReady):
+                logging.warn('Could not retry. Skipping.')
+                return None
 
         if resp.status != 200:
             # File is probably no longer available
@@ -528,7 +568,7 @@ class Downloader(object):
             return filesize
         if outfile.tell() > filesize:
             # Our downloaded file is larger than the reported size
-            logging.warn('File \'%s\' is larger than the server copy!'
+            logging.warn('File \'%s\' is larger than the server copy! '
                          'Truncating...' % (filepath))
             # Seek to the beginning of the file and truncate
             outfile.seek(0)
@@ -638,6 +678,9 @@ if __name__ == '__main__':
     # Build thread dictionary
     threads = {}
 
+    # Reuse JSON connections
+    conn = HTTPSConnection('a.4cdn.org', timeout=args.timeout)
+
     # Read the file(s)
     try:
         if args.file:
@@ -645,7 +688,8 @@ if __name__ == '__main__':
                 for thread in f:
                     t = ChanThread(thread.strip(), downdir,
                                    linkfile=args.linkfile,
-                                   timeout=args.timeout)
+                                   timeout=args.timeout,
+                                   conn=conn)
 
                     # Check if thread is already present before adding
                     tid = t.get_threadid()
@@ -659,7 +703,8 @@ if __name__ == '__main__':
         for thread in args.thread:
             t = ChanThread(thread.strip(), downdir,
                        linkfile=args.linkfile,
-                       timeout=args.timeout)
+                       timeout=args.timeout,
+                       conn=conn)
 
             # Check if thread is already present before adding
             tid = t.get_threadid()
@@ -693,5 +738,11 @@ if __name__ == '__main__':
 
         # Save file info
         thread.save_fileinfo()
+
+        # Don't overload the servers too much
+        time.sleep(0.5)
+
+    # Close the JSON connection
+    conn.close()
 
     logging.info('Completed all downloads in %ds' % (time.time() - starttime))
